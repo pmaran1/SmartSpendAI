@@ -1,64 +1,106 @@
 
-import React from 'react';
-import { AIInsight } from '../types';
+import React, { useState, useRef, useEffect } from 'react';
+import { AIInsight, Transaction, ChatMessage } from '../types';
 import { Icons } from '../constants';
 
 interface AIAssistantProps {
   insights: AIInsight[];
   isLoading: boolean;
+  transactions: Transaction[];
+  onAsk: (query: string) => Promise<string>;
 }
 
-const AIAssistant: React.FC<AIAssistantProps> = ({ insights, isLoading }) => {
-  if (isLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <div className="h-12 w-12 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
-        <p className="mt-4 text-gray-500 font-medium">Gemini is analyzing your spending patterns...</p>
-      </div>
-    );
-  }
+const AIAssistant: React.FC<AIAssistantProps> = ({ insights, isLoading, transactions, onAsk }) => {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [query, setQuery] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  if (insights.length === 0) {
-    return (
-      <div className="rounded-2xl border-2 border-dashed border-gray-200 p-12 text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50 text-blue-600">
-          <Icons.Sparkles className="h-8 w-8" />
-        </div>
-        <h3 className="text-xl font-bold text-gray-900">Not enough data</h3>
-        <p className="mt-2 text-gray-500">Record at least 5 transactions to unlock AI-powered financial coaching.</p>
-      </div>
-    );
-  }
+  useEffect(() => {
+    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+  }, [messages]);
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim() || isChatLoading) return;
+
+    const userMsg: ChatMessage = { role: 'user', text: query };
+    setMessages(prev => [...prev, userMsg]);
+    setQuery('');
+    setIsChatLoading(true);
+
+    const response = await onAsk(query);
+    setMessages(prev => [...prev, { role: 'model', text: response }]);
+    setIsChatLoading(false);
+  };
 
   return (
-    <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-      {insights.map((insight, idx) => (
-        <div key={idx} className="flex flex-col rounded-2xl border bg-white p-6 shadow-sm hover:shadow-md transition">
-          <div className="mb-4 flex items-start justify-between">
-            <div className={`rounded-xl p-3 ${
-              insight.type === 'saving' ? 'bg-emerald-50 text-emerald-600' :
-              insight.type === 'alert' ? 'bg-rose-50 text-rose-600' :
-              'bg-blue-50 text-blue-600'
-            }`}>
-              {insight.type === 'saving' ? <Icons.TrendingDown className="h-6 w-6" /> :
-               insight.type === 'alert' ? <Icons.TrendingUp className="h-6 w-6" /> :
-               <Icons.Sparkles className="h-6 w-6" />}
+    <div className="space-y-8">
+      {/* Dynamic Insights Grid */}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+        {isLoading ? (
+          <div className="col-span-full py-12 text-center text-gray-400 animate-pulse">AI is contemplating your wealth...</div>
+        ) : (
+          insights.map((insight, idx) => (
+            <div key={idx} className="rounded-2xl border bg-white p-6 shadow-sm hover:shadow-md transition">
+              <div className="mb-4 flex items-start justify-between">
+                <div className={`rounded-xl p-3 ${
+                  insight.type === 'saving' ? 'bg-emerald-50 text-emerald-600' :
+                  insight.type === 'alert' ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-blue-600'
+                }`}>
+                  <Icons.Sparkles className="h-6 w-6" />
+                </div>
+                <span className="rounded-full px-2 py-1 text-[10px] font-bold uppercase bg-blue-100 text-blue-700">{insight.impact}</span>
+              </div>
+              <h4 className="text-lg font-bold">{insight.title}</h4>
+              <p className="mt-2 text-sm text-gray-600 leading-relaxed">{insight.description}</p>
             </div>
-            <span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${
-              insight.impact === 'high' ? 'bg-rose-100 text-rose-700' :
-              insight.impact === 'medium' ? 'bg-amber-100 text-amber-700' :
-              'bg-blue-100 text-blue-700'
-            }`}>
-              {insight.impact} Impact
-            </span>
+          ))
+        )}
+      </div>
+
+      {/* Financial Chatbox */}
+      <div className="rounded-2xl border bg-white shadow-xl flex flex-col h-[500px] overflow-hidden">
+        <div className="bg-blue-600 p-4 text-white flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Icons.Message className="h-6 w-6" />
+            <span className="font-bold">Financial Sidekick Chat</span>
           </div>
-          <h4 className="text-lg font-bold text-gray-900">{insight.title}</h4>
-          <p className="mt-2 flex-1 text-sm text-gray-600 leading-relaxed">{insight.description}</p>
-          <div className="mt-6">
-            <button className="text-sm font-semibold text-blue-600 hover:text-blue-700">Learn more &rarr;</button>
-          </div>
+          <span className="text-[10px] bg-blue-500 px-2 py-1 rounded font-bold uppercase tracking-widest">Powered by Gemini</span>
         </div>
-      ))}
+        
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-gray-50">
+          {messages.length === 0 && (
+            <div className="h-full flex flex-col items-center justify-center text-center text-gray-400 p-8">
+              <Icons.Sparkles className="h-12 w-12 mb-4 opacity-20" />
+              <p className="text-sm">"How much did I spend at Starbucks?"<br/>"What's my biggest expense category?"</p>
+            </div>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm ${
+                m.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border text-gray-700 rounded-tl-none shadow-sm'
+              }`}>
+                {m.text}
+              </div>
+            </div>
+          ))}
+          {isChatLoading && <div className="text-xs text-gray-400 italic px-2">Sidekick is thinking...</div>}
+        </div>
+
+        <form onSubmit={handleSend} className="p-4 bg-white border-t flex gap-2">
+          <input 
+            type="text" 
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Ask anything about your spending..."
+            className="flex-1 bg-gray-100 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+          <button type="submit" disabled={isChatLoading} className="bg-blue-600 text-white p-3 rounded-xl hover:bg-blue-700 active:scale-95 transition">
+            <svg className="h-5 w-5 rotate-90" fill="currentColor" viewBox="0 0 20 20"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/></svg>
+          </button>
+        </form>
+      </div>
     </div>
   );
 };

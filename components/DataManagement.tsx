@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { Transaction } from '../types';
 import { Icons, CURRENCIES } from '../constants';
+import * as XLSX from 'xlsx';
 
 interface DataManagementProps {
   transactions: Transaction[];
@@ -12,6 +13,13 @@ interface DataManagementProps {
   onAddCategory: (name: string) => void;
   onRemoveCategory: (name: string) => void;
   onCurrencyChange: (code: string) => void;
+  customCurrencies: {code: string, symbol: string, name: string}[];
+  onAddCustomCurrency: (currency: {code: string, symbol: string, name: string}) => void;
+  onRemoveCustomCurrency: (code: string) => void;
+  onBackupToDrive?: () => void;
+  onRestoreFromDrive?: () => void;
+  isDriveOperating?: boolean;
+  notify?: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 const DataManagement: React.FC<DataManagementProps> = ({ 
@@ -22,9 +30,18 @@ const DataManagement: React.FC<DataManagementProps> = ({
   onRestore,
   onAddCategory,
   onRemoveCategory,
-  onCurrencyChange
+  onCurrencyChange,
+  customCurrencies,
+  onAddCustomCurrency,
+  onRemoveCustomCurrency,
+  onBackupToDrive,
+  onRestoreFromDrive,
+  isDriveOperating,
+  notify
 }) => {
   const [newCategory, setNewCategory] = useState('');
+  const [showCustomCurrencyForm, setShowCustomCurrencyForm] = useState(false);
+  const [customCurrForm, setCustomCurrForm] = useState({ code: '', symbol: '', name: '' });
 
   const handleAddCategory = (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,19 +51,32 @@ const DataManagement: React.FC<DataManagementProps> = ({
     }
   };
 
+  const handleAddCustomCurrency = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (customCurrForm.code && customCurrForm.symbol && customCurrForm.name) {
+      onAddCustomCurrency({ ...customCurrForm, code: customCurrForm.code.toUpperCase() });
+      setCustomCurrForm({ code: '', symbol: '', name: '' });
+      setShowCustomCurrencyForm(false);
+    }
+  };
+
+  const downloadTemplate = () => {
+    const data = [['Date', 'Type', 'Category', 'Description', 'Amount'], [new Date().toISOString().split('T')[0], 'expense', 'Food & Dining', 'Sample Lunch', 15.00]];
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Transactions");
+    XLSX.writeFile(wb, "SmartSpend_Template.xlsx");
+  };
+
   const exportToCSV = () => {
-    if (transactions.length === 0) return;
-    const headers = ['Date', 'Type', 'Category', 'Description', 'Amount'];
-    const rows = transactions.map(t => [t.date, t.type, t.category, t.description, t.amount]);
-    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `smartspend_export_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    if (transactions.length === 0) {
+      notify?.("No transactions to export.", 'info');
+      return;
+    }
+    const ws = XLSX.utils.json_to_sheet(transactions);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "History");
+    XLSX.writeFile(wb, `smartspend_export_${new Date().getTime()}.xlsx`);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -56,136 +86,119 @@ const DataManagement: React.FC<DataManagementProps> = ({
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const text = event.target?.result as string;
-        const rows = text.split("\n").slice(1);
-        const imported: Transaction[] = rows.filter(row => row.trim()).map(row => {
-          const [date, type, category, description, amount] = row.split(",");
-          return {
-            id: crypto.randomUUID(),
-            date,
-            type: type as any,
-            category,
-            description,
-            amount: parseFloat(amount)
-          };
-        });
-        onImport(imported);
-        alert(`Successfully imported ${imported.length} transactions!`);
-      } catch (err) {
-        alert("Failed to parse CSV. Please ensure format is: Date, Type, Category, Description, Amount");
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const backupToLocal = () => {
-    const data = JSON.stringify(transactions);
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `smartspend_backup_${new Date().getTime()}.json`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const restoreFromBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = JSON.parse(event.target?.result as string);
-        if (Array.isArray(data)) {
-          onRestore(data);
-          alert("Backup restored successfully!");
+        const data = new Uint8Array(event.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const jsonData: any[] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+        
+        if (jsonData.length === 0) {
+          notify?.("The uploaded file appears to be empty.", 'error');
+          return;
         }
+
+        const mappedData = jsonData.map(row => ({
+          ...row,
+          id: row.id || crypto.randomUUID(),
+          // Cast date explicitly to string to handle Excel's numeric date format
+          date: String(row.Date || row.date || new Date().toISOString().split('T')[0]),
+          type: (row.Type || row.type || 'expense').toLowerCase(),
+          category: row.Category || row.category || 'Other',
+          description: row.Description || row.description || 'Imported Transaction',
+          amount: parseFloat(row.Amount || row.amount || 0)
+        }));
+
+        onImport(mappedData);
+        
+        // Reset input so the same file can be uploaded again if needed
+        e.target.value = '';
       } catch (err) {
-        alert("Invalid backup file.");
+        console.error(err);
+        notify?.("Failed to parse file. Please ensure you're using the correct template.", 'error');
       }
     };
-    reader.readAsText(file);
+    reader.readAsArrayBuffer(file);
   };
 
   return (
-    <div className="space-y-8">
-      {/* Settings Grid */}
+    <div className="space-y-8 pb-12">
+      {/* Google Drive Cloud Card */}
+      <div className="rounded-2xl border border-indigo-100 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white via-indigo-50/20 to-white p-6 sm:p-8 shadow-sm">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="bg-white p-2 rounded-xl shadow-sm border border-indigo-100">
+             <svg className="h-6 w-6 text-indigo-600" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M15.11 3H8.89L3 13.14L6.05 18.5H17.95L21 13.14L15.11 3ZM15.42 16.5H8.58L5.53 11.23L8.68 5.75H15.31L18.47 11.23L15.42 16.5Z" />
+             </svg>
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-gray-900">Google Drive Cloud</h3>
+            <p className="text-sm text-gray-500 font-medium">Safe, private backups on your own Drive.</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <button 
+            onClick={onBackupToDrive} 
+            disabled={isDriveOperating}
+            className="group flex items-center justify-between rounded-2xl bg-indigo-600 px-6 py-4 text-left text-white shadow-xl shadow-indigo-100 transition hover:bg-indigo-700 active:scale-95 disabled:opacity-50"
+          >
+            <div>
+              <div className="font-bold">Backup to Drive</div>
+              <div className="text-[10px] uppercase font-bold opacity-70">Sync current records</div>
+            </div>
+            {isDriveOperating ? <div className="animate-spin h-6 w-6 border-2 border-white/20 border-t-white rounded-full" /> : <Icons.Upload className="h-6 w-6 text-white" />}
+          </button>
+
+          <button 
+            onClick={onRestoreFromDrive} 
+            disabled={isDriveOperating}
+            className="group flex items-center justify-between rounded-2xl border border-indigo-200 bg-white px-6 py-4 text-left shadow-sm transition hover:bg-indigo-50 active:scale-95 disabled:opacity-50"
+          >
+            <div className="text-indigo-900">
+              <div className="font-bold">Restore from Drive</div>
+              <div className="text-[10px] uppercase font-bold text-indigo-400">Download cloud snapshot</div>
+            </div>
+            {isDriveOperating ? <div className="animate-spin h-6 w-6 border-2 border-indigo-600/20 border-t-indigo-600 rounded-full" /> : <Icons.Download className="h-6 w-6 text-indigo-600" />}
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-        {/* Currency Management */}
-        <div className="rounded-2xl border bg-white p-8 shadow-sm">
-          <h3 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
-            <Icons.Currency className="h-5 w-5 text-blue-600" /> Currency Settings
-          </h3>
-          <p className="text-gray-500 mb-6 text-sm">Select your primary currency for all calculations.</p>
-          
-          <div className="grid grid-cols-1 gap-3">
-            {CURRENCIES.map((c) => (
-              <button
-                key={c.code}
-                onClick={() => onCurrencyChange(c.code)}
-                className={`flex items-center justify-between rounded-xl border p-4 transition ${
-                  currencyCode === c.code 
-                    ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm' 
-                    : 'border-gray-100 hover:border-gray-200'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white font-bold text-gray-900 shadow-sm border border-gray-100">
-                    {c.symbol}
-                  </span>
-                  <div className="text-left">
-                    <div className="font-bold text-sm">{c.name}</div>
-                    <div className="text-[10px] uppercase font-bold text-gray-400">{c.code}</div>
-                  </div>
-                </div>
-                {currencyCode === c.code && (
-                  <div className="rounded-full bg-blue-600 p-1 text-white">
-                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                )}
+        <div className="rounded-2xl border bg-white p-6 sm:p-8 shadow-sm">
+          <div className="mb-6 flex items-center justify-between">
+            <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Icons.Currency className="h-5 w-5 text-blue-600" /> Currency</h3>
+            <button onClick={() => setShowCustomCurrencyForm(!showCustomCurrencyForm)} className="shrink-0 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600">
+              {showCustomCurrencyForm ? 'Cancel' : 'Add Custom'}
+            </button>
+          </div>
+          {showCustomCurrencyForm && (
+            <form onSubmit={handleAddCustomCurrency} className="mb-6 space-y-3 bg-gray-50 p-4 rounded-xl border">
+              <input type="text" placeholder="Code (e.g. BTC)" value={customCurrForm.code} onChange={e => setCustomCurrForm(p => ({ ...p, code: e.target.value }))} className="w-full rounded-lg border px-3 py-2 text-sm" />
+              <input type="text" placeholder="Symbol (e.g. ₿)" value={customCurrForm.symbol} onChange={e => setCustomCurrForm(p => ({ ...p, symbol: e.target.value }))} className="w-full rounded-lg border px-3 py-2 text-sm" />
+              <input type="text" placeholder="Full Name" value={customCurrForm.name} onChange={e => setCustomCurrForm(p => ({ ...p, name: e.target.value }))} className="w-full rounded-lg border px-3 py-2 text-sm" />
+              <button type="submit" className="w-full rounded-lg bg-blue-600 py-2 text-xs font-bold text-white">Save</button>
+            </form>
+          )}
+          <div className="space-y-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+            {[...CURRENCIES, ...customCurrencies].map((c) => (
+              <button key={c.code} onClick={() => onCurrencyChange(c.code)} className={`flex w-full items-center justify-between rounded-xl border p-4 ${currencyCode === c.code ? 'border-blue-500 bg-blue-50 text-blue-700' : 'bg-white border-gray-100'}`}>
+                <span className="font-bold">{c.name} ({c.symbol})</span>
+                {currencyCode === c.code && <div className="h-2 w-2 rounded-full bg-blue-600" />}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Category Management */}
-        <div className="rounded-2xl border bg-white p-8 shadow-sm">
-          <h3 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
-            <Icons.Tag className="h-5 w-5 text-blue-600" /> Spend Categories
-          </h3>
-          <p className="text-gray-500 mb-6 text-sm">Organize your expenses with custom labels.</p>
-          
-          <form onSubmit={handleAddCategory} className="flex gap-2 mb-6">
-            <input 
-              type="text" 
-              placeholder="New category..."
-              value={newCategory}
-              onChange={(e) => setNewCategory(e.target.value)}
-              className="flex-1 rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition"
-            />
-            <button 
-              type="submit"
-              className="rounded-xl bg-blue-600 px-6 py-2 font-bold text-white text-sm hover:bg-blue-700 transition"
-            >
-              Add
-            </button>
+        <div className="rounded-2xl border bg-white p-6 sm:p-8 shadow-sm">
+          <h3 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2"><Icons.Tag className="h-5 w-5 text-blue-600" /> Categories</h3>
+          <form onSubmit={handleAddCategory} className="flex items-center gap-2 mb-6">
+            <input type="text" placeholder="New category..." value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="flex-1 min-w-0 h-11 rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm focus:border-blue-500" />
+            <button type="submit" className="shrink-0 h-11 rounded-xl bg-blue-600 px-6 font-bold text-white text-sm whitespace-nowrap">Add</button>
           </form>
-
           <div className="flex flex-wrap gap-2">
             {categories.map((cat) => (
               <div key={cat} className="group flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-bold text-gray-700">
                 {cat}
-                <button 
-                  onClick={() => onRemoveCategory(cat)}
-                  className="text-gray-400 hover:text-rose-500 transition-colors"
-                >
-                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                <button onClick={() => onRemoveCategory(cat)} className="text-gray-400 hover:text-rose-500 transition-colors"><Icons.Plus className="h-3 w-3 rotate-45" /></button>
               </div>
             ))}
           </div>
@@ -193,59 +206,27 @@ const DataManagement: React.FC<DataManagementProps> = ({
       </div>
 
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-        <div className="rounded-2xl border bg-white p-8 shadow-sm">
-          <h3 className="text-xl font-bold text-gray-900 mb-2">Excel / CSV Export</h3>
-          <p className="text-gray-500 mb-6 text-sm">Download your full history for external analysis.</p>
-          
+        <div className="rounded-2xl border bg-white p-6 sm:p-8 shadow-sm">
+          <h3 className="text-xl font-bold text-gray-900 mb-6">Import & Export</h3>
           <div className="space-y-4">
-            <button 
-              onClick={exportToCSV}
-              className="flex w-full items-center justify-between rounded-xl border border-gray-100 p-4 text-left hover:bg-gray-50 transition"
-            >
-              <div>
-                <div className="font-semibold text-gray-900">Download History</div>
-                <div className="text-xs text-gray-400">Save as CSV compatible with Excel</div>
-              </div>
-              <Icons.Download className="h-6 w-6 text-blue-600" />
-            </button>
-
-            <label className="flex w-full cursor-pointer items-center justify-between rounded-xl border border-gray-100 p-4 text-left hover:bg-gray-50 transition">
-              <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
-              <div>
-                <div className="font-semibold text-gray-900">Upload CSV</div>
-                <div className="text-xs text-gray-400">Batch import your transactions</div>
-              </div>
-              <Icons.Upload className="h-6 w-6 text-blue-600" />
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={downloadTemplate} className="rounded-xl border border-blue-100 bg-blue-50/30 py-3 text-xs font-bold text-blue-900">Template</button>
+              <button onClick={exportToCSV} className="rounded-xl border border-gray-100 bg-gray-50/30 py-3 text-xs font-bold text-gray-900">Export XLSX</button>
+            </div>
+            <label className="flex w-full cursor-pointer items-center justify-between rounded-xl bg-blue-600 p-4 shadow-lg shadow-blue-100">
+              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} className="hidden" />
+              <div className="text-white font-bold">Bulk Upload</div>
+              <Icons.Upload className="h-6 w-6 text-white shrink-0" />
             </label>
           </div>
         </div>
-
-        <div className="rounded-2xl border bg-white p-8 shadow-sm">
-          <h3 className="text-xl font-bold text-gray-900 mb-2">Cloud Backup</h3>
-          <p className="text-gray-500 mb-6 text-sm">Securely store a complete system snapshot.</p>
-          
+        <div className="rounded-2xl border bg-white p-6 sm:p-8 shadow-sm">
+          <h3 className="text-xl font-bold text-gray-900 mb-6">Local Snapshots</h3>
           <div className="space-y-4">
-            <button 
-              onClick={backupToLocal}
-              className="flex w-full items-center justify-between rounded-xl border border-blue-100 bg-blue-50/50 p-4 text-left hover:bg-blue-50 transition"
-            >
-              <div>
-                <div className="font-semibold text-blue-900">System Backup</div>
-                <div className="text-xs text-blue-700">Full JSON backup including categories</div>
-              </div>
+            <button onClick={() => { const d = JSON.stringify(transactions); const b = new Blob([d], {type:'application/json'}); const u = URL.createObjectURL(b); const l = document.createElement("a"); l.href = u; l.download = "backup.json"; l.click(); }} className="flex w-full items-center justify-between rounded-xl border p-4 text-left hover:bg-gray-50">
+              <div className="font-bold text-gray-900">JSON Export</div>
               <Icons.Database className="h-6 w-6 text-blue-600" />
             </button>
-
-            <label className="flex w-full cursor-pointer items-center justify-between rounded-xl border border-gray-100 p-4 text-left hover:bg-gray-50 transition">
-              <input type="file" accept=".json" onChange={restoreFromBackup} className="hidden" />
-              <div>
-                <div className="font-semibold text-gray-900">System Restore</div>
-                <div className="text-xs text-gray-400">Recover from a JSON snapshot</div>
-              </div>
-              <div className="rounded-lg bg-gray-100 p-2 text-gray-500">
-                <Icons.Database className="h-5 w-5" />
-              </div>
-            </label>
           </div>
         </div>
       </div>

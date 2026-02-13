@@ -1,5 +1,8 @@
 {
   "name": "SmartSpend AI",
-  "description": "A comprehensive personal expense tracker with AI-driven insights, visual trends, and period comparisons. Features include Excel import/export and data backup capabilities.",
-  "requestFramePermissions": []
+  "description": "Multimodal personal expense tracker with Vision, Voice, and Chat intelligence.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
 }
