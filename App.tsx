@@ -22,7 +22,7 @@ interface Notification {
 const App: React.FC = () => {
   const safeParse = <T,>(key: string, defaultValue: T): T => {
     try {
-      const saved = localStorage.getItem(key);
+      const saved = localStorage.getItem('smartspend_user_v2');
       if (!saved || saved === 'undefined' || saved === 'null') return defaultValue;
       return JSON.parse(saved);
     } catch (e) {
@@ -31,13 +31,72 @@ const App: React.FC = () => {
     }
   };
 
-  const [user, setUser] = useState<UserProfile | null>(() => safeParse('smartspend_user_v2', null));
-  const [transactions, setTransactions] = useState<Transaction[]>(() => safeParse('smartspend_transactions', []));
-  const [budgets, setBudgets] = useState<Budget[]>(() => safeParse('smartspend_budgets', []));
-  const [recurringRules, setRecurringRules] = useState<RecurringTransaction[]>(() => safeParse('smartspend_recurring_rules', []));
-  const [categories, setCategories] = useState<string[]>(() => safeParse('smartspend_categories', DEFAULT_CATEGORIES));
+  const createDefaultUser = (): UserProfile => ({
+    id: 'local-user',
+    name: 'Smart User',
+    email: 'hello@smartspend.ai',
+    picture: "https://ui-avatars.com/api/?name=Smart+User&background=3b82f6&color=fff",
+    isGuest: true,
+    loginMethod: 'guest',
+    joinDate: new Date().toISOString(),
+    savingsGoal: 500,
+    streak: 1,
+    level: 1
+  });
+
+  const [user, setUser] = useState<UserProfile>(() => {
+    const saved = localStorage.getItem('smartspend_user_v2');
+    if (saved && saved !== 'undefined' && saved !== 'null') {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        return createDefaultUser();
+      }
+    }
+    return createDefaultUser();
+  });
+
+  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+    try {
+      const saved = localStorage.getItem('smartspend_transactions');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [budgets, setBudgets] = useState<Budget[]>(() => {
+    try {
+      const saved = localStorage.getItem('smartspend_budgets');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [recurringRules, setRecurringRules] = useState<RecurringTransaction[]>(() => {
+    try {
+      const saved = localStorage.getItem('smartspend_recurring_rules');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [categories, setCategories] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('smartspend_categories');
+      return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
+    } catch (e) {
+      return DEFAULT_CATEGORIES;
+    }
+  });
   const [currencyCode, setCurrencyCode] = useState<string>(() => localStorage.getItem('smartspend_currency') || 'USD');
-  const [customCurrencies, setCustomCurrencies] = useState<{code: string, symbol: string, name: string}[]>(() => safeParse('smartspend_custom_currencies', []));
+  const [customCurrencies, setCustomCurrencies] = useState<{code: string, symbol: string, name: string}[]>(() => {
+    try {
+      const saved = localStorage.getItem('smartspend_custom_currencies');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
 
   const [notification, setNotification] = useState<Notification | null>(null);
   const [isDriveOperating, setIsDriveOperating] = useState(false);
@@ -45,15 +104,9 @@ const App: React.FC = () => {
   const [magicInput, setMagicInput] = useState('');
   const [isMagicLoading, setIsMagicLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [loginStep, setLoginStep] = useState<'selection' | 'email'>('selection');
-  const [emailFormData, setEmailFormData] = useState({ name: '', email: '' });
   
   const recognitionRef = useRef<any>(null);
   const receiptInputRef = useRef<HTMLInputElement>(null);
-  const googleBtnRef = useRef<HTMLDivElement>(null);
-  const tokenClientRef = useRef<any>(null);
-
-  const isGoogleIdValid = GOOGLE_CLIENT_ID && !GOOGLE_CLIENT_ID.startsWith("YOUR_GOOGLE_CLIENT_ID");
 
   const currency = useMemo(() => {
     const allCurrencies = [...CURRENCIES, ...customCurrencies];
@@ -82,91 +135,19 @@ const App: React.FC = () => {
     localStorage.setItem('smartspend_categories', JSON.stringify(categories));
     localStorage.setItem('smartspend_currency', currencyCode);
     localStorage.setItem('smartspend_custom_currencies', JSON.stringify(customCurrencies));
-    if (user) {
-      localStorage.setItem('smartspend_user_v2', JSON.stringify(user));
-    } else {
-      localStorage.removeItem('smartspend_user_v2');
-    }
+    localStorage.setItem('smartspend_user_v2', JSON.stringify(user));
   }, [transactions, budgets, recurringRules, categories, currencyCode, customCurrencies, user]);
 
   useEffect(() => {
-    const initGSI = () => {
-      if (!isGoogleIdValid || user) return;
-      if (typeof google !== 'undefined' && google.accounts) {
-        try {
-          google.accounts.id.initialize({
-            client_id: GOOGLE_CLIENT_ID,
-            callback: (res: any) => {
-              const payload = JSON.parse(atob(res.credential.split('.')[1]));
-              const newUser: UserProfile = {
-                id: payload.sub,
-                name: payload.name,
-                email: payload.email,
-                picture: payload.picture,
-                loginMethod: 'google',
-                joinDate: new Date().toISOString(),
-                savingsGoal: 500,
-                streak: 1,
-                level: 1
-              };
-              setUser(newUser);
-            },
-          });
-          if (googleBtnRef.current) {
-            google.accounts.id.renderButton(googleBtnRef.current, { theme: 'outline', size: 'large', shape: 'pill' });
-          }
-        } catch (e) {
-          console.error("GSI Init Error", e);
-        }
-      } else {
-        setTimeout(initGSI, 500);
-      }
-    };
-    initGSI();
-  }, [user, isGoogleIdValid, loginStep]); // loginStep added to re-render button when switching back
-
-  const handleEmailLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!emailFormData.name || !emailFormData.email) return;
-    const newUser: UserProfile = {
-      id: crypto.randomUUID(),
-      name: emailFormData.name,
-      email: emailFormData.email,
-      picture: `https://ui-avatars.com/api/?name=${encodeURIComponent(emailFormData.name)}&background=3b82f6&color=fff`,
-      loginMethod: 'email',
-      joinDate: new Date().toISOString(),
-      savingsGoal: 500,
-      streak: 1,
-      level: 1
-    };
-    setUser(newUser);
-    notify("Welcome!");
-  };
-
-  const handleGuestLogin = () => {
-    const newUser: UserProfile = {
-      id: 'guest',
-      name: 'Guest Explorer',
-      email: 'guest@smartspend.ai',
-      picture: "https://ui-avatars.com/api/?name=Guest+Explorer&background=64748b&color=fff",
-      isGuest: true,
-      loginMethod: 'guest',
-      joinDate: new Date().toISOString(),
-      savingsGoal: 100,
-      streak: 1,
-      level: 1
-    };
-    setUser(newUser);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('smartspend_user_v2');
-    setUser(null);
-    setLoginStep('selection');
-    // We don't necessarily need window.location.reload() if state is handled correctly,
-    // but it's a safe way to clear memory.
-    setTimeout(() => window.location.reload(), 100);
-  };
+    if (!user || transactions.length === 0) return;
+    const sorted = [...transactions].sort((a, b) => b.date.localeCompare(a.date));
+    const lastDate = sorted[0].date;
+    const today = new Date().toISOString().split('T')[0];
+    
+    if (lastDate === today && user.streak === 0) {
+      setUser(prev => ({ ...prev, streak: prev.streak + 1 }));
+    }
+  }, [transactions, user.id]);
 
   const addTransaction = (t: Omit<Transaction, 'id'> & { frequency?: Frequency }) => {
     const id = crypto.randomUUID();
@@ -245,107 +226,6 @@ const App: React.FC = () => {
     }
   };
 
-  if (!user) {
-    return (
-      <div className="min-h-screen w-full bg-[#f8fafc] flex flex-col items-center justify-center p-4 sm:p-6 bg-[radial-gradient(circle_at_20%_30%,_#eff6ff_0%,_transparent_50%),radial-gradient(circle_at_80%_70%,_#f5f3ff_0%,_transparent_50%)]">
-        <div className="w-full max-w-lg animate-fadeIn z-10">
-          <div className="bg-white border border-gray-100 p-8 md:p-12 rounded-[2.5rem] sm:rounded-[3rem] shadow-2xl space-y-8 sm:space-y-10">
-            <div className="text-center space-y-4">
-              <div className="mx-auto flex h-16 w-16 sm:h-20 sm:w-20 items-center justify-center rounded-2xl sm:rounded-3xl bg-blue-600 text-white shadow-2xl shadow-blue-200 rotate-6">
-                <Icons.Wallet className="h-10 w-10 sm:h-12 sm:w-12" />
-              </div>
-              <div>
-                <h1 className="text-3xl sm:text-4xl font-black text-gray-900 tracking-tight">SmartSpend</h1>
-                <p className="text-sm sm:text-base text-gray-500 font-semibold mt-1 px-4">Your intelligent journey to financial freedom</p>
-              </div>
-            </div>
-
-            {loginStep === 'selection' ? (
-              <div className="grid grid-cols-1 gap-4">
-                {isGoogleIdValid && (
-                  <div className="flex flex-col items-center gap-3">
-                    <div ref={googleBtnRef} className="w-full flex justify-center scale-105 sm:scale-110"></div>
-                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Secure Cloud Sync</p>
-                  </div>
-                )}
-                
-                <div className="relative flex py-2 items-center">
-                  <div className="flex-grow border-t border-gray-100"></div>
-                  <span className="flex-shrink mx-4 text-gray-300 text-[10px] font-black uppercase tracking-tighter">or continue with</span>
-                  <div className="flex-grow border-t border-gray-100"></div>
-                </div>
-
-                <button 
-                  onClick={() => setLoginStep('email')}
-                  className="w-full group flex items-center gap-4 rounded-[1.5rem] p-4 sm:p-5 text-left border border-gray-100 hover:border-blue-200 hover:bg-blue-50/30 transition-all active:scale-[0.98]"
-                >
-                  <div className="h-10 w-10 sm:h-12 sm:w-12 flex items-center justify-center rounded-xl sm:rounded-2xl bg-amber-50 text-amber-600 group-hover:bg-amber-100 transition-colors">
-                    <Icons.Message className="h-5 w-5 sm:h-6 sm:w-6" />
-                  </div>
-                  <div>
-                    <div className="font-black text-gray-900 text-sm sm:text-base">Email Profile</div>
-                    <div className="text-[10px] sm:text-xs text-gray-500 font-medium">Named local persistent account</div>
-                  </div>
-                </button>
-
-                <button 
-                  onClick={handleGuestLogin}
-                  className="w-full group flex items-center gap-4 rounded-[1.5rem] p-4 sm:p-5 text-left border border-gray-100 hover:border-slate-200 hover:bg-slate-50/50 transition-all active:scale-[0.98]"
-                >
-                  <div className="h-10 w-10 sm:h-12 sm:w-12 flex items-center justify-center rounded-xl sm:rounded-2xl bg-slate-100 text-slate-600 group-hover:bg-slate-200 transition-colors">
-                    <Icons.Plus className="h-5 w-5 sm:h-6 sm:w-6" />
-                  </div>
-                  <div>
-                    <div className="font-black text-gray-900 text-sm sm:text-base">Guest Mode</div>
-                    <div className="text-[10px] sm:text-xs text-gray-500 font-medium">Quick start, strictly local data</div>
-                  </div>
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={handleEmailLogin} className="space-y-6 animate-fadeIn">
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Display Name</label>
-                    <input 
-                      required
-                      type="text" 
-                      autoFocus
-                      value={emailFormData.name}
-                      onChange={e => setEmailFormData(p => ({ ...p, name: e.target.value }))}
-                      className="w-full rounded-2xl border border-gray-100 bg-gray-50 px-5 py-3.5 sm:py-4 text-sm font-bold focus:border-blue-500 focus:outline-none"
-                      placeholder="e.g. Satoshi Nakamoto"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Email Address</label>
-                    <input 
-                      required
-                      type="email" 
-                      value={emailFormData.email}
-                      onChange={e => setEmailFormData(p => ({ ...p, email: e.target.value }))}
-                      className="w-full rounded-2xl border border-gray-100 bg-gray-50 px-5 py-3.5 sm:py-4 text-sm font-bold focus:border-blue-500 focus:outline-none"
-                      placeholder="satoshi@bitcoin.org"
-                    />
-                  </div>
-                </div>
-                <div className="flex gap-3">
-                  <button type="button" onClick={() => setLoginStep('selection')} className="flex-1 rounded-2xl border border-gray-100 py-4 font-black text-gray-500 text-sm hover:bg-gray-50 transition">Back</button>
-                  <button type="submit" className="flex-[2] rounded-2xl bg-blue-600 py-4 font-black text-white text-sm shadow-xl shadow-blue-100 hover:bg-blue-700 transition">Create Account</button>
-                </div>
-              </form>
-            )}
-
-            <p className="text-center text-[10px] text-gray-300 font-medium uppercase tracking-widest px-8">Privacy first: your data belongs to you.</p>
-          </div>
-          
-          <div className="mt-8 text-center">
-             <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="text-[10px] font-black text-gray-400 hover:text-rose-500 uppercase tracking-widest transition">Troubles logging in? Force Clear Data</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const userLevel = Math.floor(transactions.length / 10) + 1;
 
   return (
@@ -367,7 +247,6 @@ const App: React.FC = () => {
           </div>
           <h1 className="text-xl font-black tracking-tight text-gray-900">SmartSpend</h1>
         </div>
-        <img src={user.picture} alt={user.name} className="h-10 w-10 rounded-full border-2 border-white shadow-md ring-1 ring-gray-100" />
       </header>
 
       {/* Sidebar Navigation */}
@@ -388,19 +267,7 @@ const App: React.FC = () => {
             </button>
           ))}
         </nav>
-        <div className="mt-auto pt-6 border-t border-gray-100 space-y-6">
-           <div className="flex items-center gap-4 px-2">
-             <img src={user.picture} alt={user.name} className="h-12 w-12 rounded-full border-2 border-blue-50 shadow-sm" />
-             <div className="min-w-0">
-               <p className="text-sm font-black truncate">{user.name}</p>
-               <div className="flex items-center gap-1.5">
-                  <span className="text-[9px] font-black bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">LVL {userLevel}</span>
-                  <span className="text-[9px] font-black bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded">🔥 {user.streak}d</span>
-               </div>
-             </div>
-           </div>
-           <button onClick={handleLogout} className="flex w-full items-center gap-3 rounded-2xl px-5 py-3 text-sm font-bold text-gray-400 hover:text-rose-600 hover:bg-rose-50 transition"><Icons.Logout className="h-4 w-4" /> Logout</button>
-        </div>
+        {/* User profile and Reset App menu item removed from sidebar */}
       </aside>
 
       {/* Mobile Bottom Navigation */}
@@ -428,7 +295,7 @@ const App: React.FC = () => {
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
                <div>
                  <h2 className="text-3xl md:text-4xl font-black text-gray-900 tracking-tight">Financial Pulse</h2>
-                 <p className="text-gray-500 font-bold mt-1">Hello {user.name.split(' ')[0]}, your economy is looking {totals.balance > 0 ? 'solid' : 'tight'}.</p>
+                 <p className="text-gray-500 font-bold mt-1">Your economy is looking {totals.balance > 0 ? 'solid' : 'tight'}.</p>
                </div>
                <div className="flex gap-4">
                  <div className="bg-blue-50 p-4 rounded-3xl text-center min-w-[140px]">
@@ -490,42 +357,7 @@ const App: React.FC = () => {
 
         {activeTab === 'settings' && (
           <div className="space-y-12">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              <div className="lg:col-span-2 space-y-8">
-                <div className="rounded-[2.5rem] bg-white border border-gray-100 p-8 shadow-sm space-y-8">
-                   <h3 className="text-xl font-black">Profile Management</h3>
-                   <div className="flex flex-col sm:flex-row items-center gap-8">
-                     <div className="relative group">
-                       <img src={user.picture} alt={user.name} className="h-32 w-32 rounded-[2.5rem] border-4 border-blue-50 shadow-xl" />
-                       <div className="absolute -bottom-2 -right-2 bg-blue-600 text-white p-2 rounded-xl shadow-lg cursor-pointer">
-                         <Icons.Camera className="h-5 w-5" />
-                       </div>
-                     </div>
-                     <div className="flex-1 space-y-4">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Display Name</label>
-                            <input type="text" value={user.name} onChange={e => setUser(p => p ? {...p, name: e.target.value} : null)} className="w-full bg-gray-50 rounded-xl px-4 py-3 text-sm font-bold border-none" />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Savings Goal</label>
-                            <input type="number" value={user.savingsGoal} onChange={e => setUser(p => p ? {...p, savingsGoal: parseInt(e.target.value) || 0} : null)} className="w-full bg-gray-50 rounded-xl px-4 py-3 text-sm font-bold border-none" />
-                          </div>
-                        </div>
-                        <div className="p-4 bg-blue-50 rounded-2xl flex items-center justify-between">
-                           <div>
-                             <div className="text-[10px] font-black text-blue-400 uppercase tracking-widest">Login Method</div>
-                             <div className="text-sm font-bold text-blue-700 capitalize">{user.loginMethod}</div>
-                           </div>
-                           <div className="text-right">
-                             <div className="text-[10px] font-black text-blue-400 uppercase tracking-widest">Member Since</div>
-                             <div className="text-sm font-bold text-blue-700">{new Date(user.joinDate).toLocaleDateString()}</div>
-                           </div>
-                        </div>
-                     </div>
-                   </div>
-                </div>
-
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <DataManagement 
                   transactions={transactions} categories={categories} currencyCode={currencyCode} 
                   onImport={setTransactions} onRestore={setTransactions} 
@@ -536,11 +368,26 @@ const App: React.FC = () => {
                   onRemoveCustomCurrency={c => setCustomCurrencies(p => p.filter(x => x.code !== c))} 
                   onBackupToDrive={() => {}} onRestoreFromDrive={() => {}} isDriveOperating={isDriveOperating} notify={notify}
                 />
-              </div>
               <div className="space-y-8">
                 <div className="rounded-[2.5rem] bg-white border border-gray-100 p-8 shadow-sm">
                    <h3 className="text-xl font-black mb-6">Budget Limits</h3>
                    <BudgetManager budgets={budgets} categories={categories} currencySymbol={currency.symbol} onSetBudget={(c, l) => setBudgets(p => [...p.filter(b => b.category !== c), {category: c, limit: l}])} onRemoveBudget={c => setBudgets(p => p.filter(b => b.category !== c))} />
+                </div>
+                {/* Simplified Settings: Savings Goal setter added here since profile management was removed */}
+                <div className="rounded-[2.5rem] bg-white border border-gray-100 p-8 shadow-sm">
+                   <h3 className="text-xl font-black mb-6">Savings Goal</h3>
+                   <div className="space-y-4">
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 block">Monthly Target</label>
+                        <input 
+                          type="number" 
+                          value={user.savingsGoal} 
+                          onChange={e => setUser(p => ({...p, savingsGoal: parseInt(e.target.value) || 0}))} 
+                          className="w-full bg-gray-50 rounded-xl px-4 py-3 text-sm font-bold border-none" 
+                        />
+                      </div>
+                      <p className="text-xs text-gray-400 font-medium italic">Adjust your monthly goal to track progress on the dashboard.</p>
+                   </div>
                 </div>
               </div>
             </div>
